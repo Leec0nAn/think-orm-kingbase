@@ -12,8 +12,7 @@ declare(strict_types=1);
 namespace think\db\builder;
 
 use think\db\BaseQuery as Query;
-use think\db\exception\DbException as Exception;
-use think\db\Raw;
+use think\db\Connection;
 
 /**
  * KingbaseES Oracle 兼容模式 SQL 构造器。
@@ -21,87 +20,96 @@ use think\db\Raw;
 class KingbaseOracle extends Oracle
 {
     /**
-     * A scalar subquery must not expose Oracle's synthetic ROWNUM column.
+     * 使用 VALUES 语法构造多行 INSERT。
+     *
+     * PDO_KDB 无法在父 Oracle Builder 的 UNION ALL SELECT 批量写法中稳定推断
+     * BLOB 等目标列的占位符类型，因此仅改写 SQL 结构；字段和值仍按原框架的
+     * 数组迭代顺序处理。
      */
-    protected string $plainSelectSql = 'SELECT%DISTINCT%%EXTRA% %FIELD% FROM %TABLE%%FORCE%%JOIN%%WHERE%%GROUP%%HAVING%%UNION%%ORDER%%LIMIT% %LOCK%%COMMENT%';
-
-    /** 当前是否正在构造使用 KingbaseES 原生分页的 SELECT。 */
-    protected bool $kingbaseSelect = false;
-
-    /**
-     * 使用 KingbaseES 原生分页构造 SELECT，保留行锁及单列子查询语义。
-     *
-     * 不添加 NUMROW 辅助列，避免关联聚合或 INSERT SELECT 列数变化；所有 SELECT
-     * 均保留 LOCK、UNION 和 ORDER。finally 恢复状态，支持重入和构造异常后的复用。
-     *
-     * @param Query $query 当前查询对象
-     * @param bool  $one   是否仅查询一条记录
-     *
-     * @return string 完整 SELECT SQL
-     */
-    public function select(Query $query, bool $one = false): string
+    public function insertAll(Query $query, array $dataSet): string
     {
-        $selectSql = $this->selectSql;
-        $selectMode = $this->kingbaseSelect;
-        $this->selectSql = $this->plainSelectSql;
-        $this->kingbaseSelect = true;
-        try {
-            return parent::select($query, $one);
-        } finally {
-            $this->selectSql = $selectSql;
-            $this->kingbaseSelect = $selectMode;
-        }
-    }
+        $options = $query->getOptions();
+        $bind    = $query->getFieldsBindType();
 
-    /**
-     * SELECT 使用 LIMIT/OFFSET，写语句继续沿用父方言的处理。
-     *
-     * @param Query $query 当前查询对象
-     * @param string $limit 数量或“偏移量,数量”
-     * @return string 分页子句
-     * @throws \InvalidArgumentException 分页参数不是非负整数
-     */
-    protected function parseLimit(Query $query, string $limit): string
-    {
-        if (!$this->kingbaseSelect) {
-            return parent::parseLimit($query, $limit);
+        if (empty($options['field']) || '*' == $options['field']) {
+            $allowFields = array_keys($bind);
+        } else {
+            $allowFields = $options['field'];
         }
-        if ('' === $limit) {
+
+        $values       = [];
+        $insertFields = null;
+
+        foreach ($dataSet as $data) {
+            $data = $this->parseData($query, $data, $allowFields, $bind);
+
+            if (null === $insertFields) {
+                $insertFields = array_keys($data);
+            }
+            $values[] = '( ' . implode(',', array_values($data)) . ' )';
+        }
+
+        if (null === $insertFields) {
             return '';
         }
-        if (!preg_match('/^\d+(?:,\d+)?$/D', $limit)) {
-            throw new \InvalidArgumentException('Invalid KES pagination: ' . $limit);
+
+        $fields = [];
+        foreach ($insertFields as $field) {
+            $fields[] = $this->parseKey($query, $field);
         }
-        $parts = explode(',', $limit);
-        return count($parts) === 2
-            ? ' LIMIT ' . $parts[1] . ' OFFSET ' . $parts[0]
-            : ' LIMIT ' . $parts[0];
+
+        return str_replace(
+            ['%INSERT%', '%TABLE%', '%EXTRA%', '%FIELD%', '%DATA%', '%COMMENT%'],
+            [
+                !empty($options['replace']) ? 'REPLACE' : 'INSERT',
+                $this->parseTable($query, $options['table']),
+                $this->parseExtra($query, $options['extra']),
+                implode(' , ', $fields),
+                'VALUES ' . implode(' , ', $values),
+                $this->parseComment($query, $options['comment']),
+            ],
+            $this->insertAllSql
+        );
     }
 
-    /**
-     * 构造 Oracle 兼容模式 INSERT，并将 REPLACE 请求降级为普通 INSERT。
-     *
-     * Oracle 兼容模式不支持 REPLACE。ThinkORM 写入多对多中间表时可能内部启用
-     * replace 选项，因此生成 SQL 期间临时关闭该选项，随后恢复；重复数据仍由
-     * 中间表的主键或唯一约束阻止。
-     *
-     * @param Query $query 当前查询对象
-     *
-     * @return string 完整 INSERT SQL
-     */
-    public function insert(Query $query): string
+    /** 使用 VALUES 语法构造固定字段批量 INSERT。 */
+    public function insertAllByKeys(Query $query, array $keys, array $datas): string
     {
-        $replace = (bool) $query->getOption('replace');
-        if (!$replace) {
-            return parent::insert($query);
+        $options = $query->getOptions();
+        $bind    = $query->getFieldsBindType();
+        $fields  = [];
+        $values  = [];
+
+        foreach ($keys as $field) {
+            $fields[] = $this->parseKey($query, $field);
         }
 
-        $query->setOption('replace', false);
-        try {
-            return parent::insert($query);
-        } finally {
-            $query->setOption('replace', true);
+        foreach ($datas as $data) {
+            foreach ($data as $key => &$val) {
+                $field = $keys[$key];
+
+                if (!$query->isAutoBind()) {
+                    $val = Connection::PARAM_STR == $bind[$field] ? '\'' . $val . '\'' : $val;
+                } else {
+                    $val = $this->parseDataBind($query, $field, $val, $bind);
+                }
+            }
+
+            $values[] = '( ' . implode(',', $data) . ' )';
         }
+
+        return str_replace(
+            ['%INSERT%', '%TABLE%', '%EXTRA%', '%FIELD%', '%DATA%', '%COMMENT%'],
+            [
+                !empty($options['replace']) ? 'REPLACE' : 'INSERT',
+                $this->parseTable($query, $options['table']),
+                $this->parseExtra($query, $options['extra']),
+                implode(' , ', $fields),
+                'VALUES ' . implode(' , ', $values),
+                $this->parseComment($query, $options['comment']),
+            ],
+            $this->insertAllSql
+        );
     }
 
     /**
@@ -118,65 +126,4 @@ class KingbaseOracle extends Oracle
         return 'random()';
     }
 
-    /**
-     * 解析字段和表标识符，并适配 Oracle 未引用对象名的大写规则。
-     *
-     * 支持整数、Raw 表达式、JSON 路径、表别名及严格模式校验；普通字段和表名
-     * 转换为大写后使用双引号引用。
-     *
-     * @param Query          $query  当前查询对象
-     * @param string|int|Raw $key    字段名、数字或 Raw 表达式
-     * @param bool           $strict 是否启用标识符严格校验
-     *
-     * @throws Exception 严格模式下标识符包含不支持的内容
-     *
-     * @return string 可安全拼入 SQL 的标识符或表达式
-     */
-    public function parseKey(Query $query, string|int|Raw $key, bool $strict = false): string
-    {
-        if (is_int($key)) {
-            return (string) $key;
-        }
-
-        if ($key instanceof Raw) {
-            return $this->parseRaw($query, $key);
-        }
-
-        $key = trim($key);
-
-        if (str_contains($key, '->') && !str_contains($key, '(')) {
-            [$field, $name] = explode('->', $key, 2);
-
-            return $this->parseKey($query, $field, true) . '."' . strtoupper($name) . '"';
-        }
-
-        if (str_contains($key, '.') && !preg_match('/[,\'\"\(\)\[\s]/', $key)) {
-            [$table, $key] = explode('.', $key, 2);
-
-            $alias = $query->getOption('alias');
-
-            if ('__TABLE__' == $table) {
-                $table = $query->getOption('table');
-                $table = is_array($table) ? array_shift($table) : $table;
-            }
-
-            if (isset($alias[$table])) {
-                $table = $alias[$table];
-            }
-        }
-
-        if ($strict && !preg_match('/^[\w\.\*]+$/', $key)) {
-            throw new Exception('not support data:' . $key);
-        }
-
-        if ('*' != $key && !preg_match('/[,\'\"\*\(\)\[.\s]/', $key)) {
-            $key = '"' . strtoupper($key) . '"';
-        }
-
-        if (isset($table)) {
-            $key = '"' . strtoupper($table) . '".' . $key;
-        }
-
-        return $key;
-    }
 }

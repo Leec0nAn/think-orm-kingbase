@@ -32,9 +32,6 @@ trait KingbaseConnection
      */
     protected string $kingbaseResolvedSchema = '';
 
-    /** @var array<string, bool> 本连接器读取过的结构缓存键 */
-    protected array $kingbaseSchemaCacheKeys = [];
-
     /** 当前 INSERT 是否真实具备数据库生成主键的语义。 */
     protected bool $kingbaseGeneratedKeyExpected = false;
 
@@ -89,17 +86,17 @@ trait KingbaseConnection
     {
         $this->kingbaseInitializedLinks = [];
         $this->kingbaseResolvedSchema   = '';
-        $this->kingbaseSchemaCacheKeys  = [];
         $this->resetKingbaseGeneratedKeyContext();
 
         return parent::close();
     }
 
     /**
-     * 执行原生 SQL，并在 DDL 成功后使本连接器已读取的结构缓存失效。
+     * 执行原生 SQL，并在原生写入前清理 ORM 生成主键上下文。
      *
      * 原生 INSERT 无法从 Query 元数据确认主键生成语义，因此先清除上一次 ORM
-     * INSERT 的生成键上下文，避免随后 getLastInsID() 返回历史值。
+     * INSERT 的生成键上下文，避免随后 getLastInsID() 返回历史值。DDL 后的字段
+     * 缓存行为继续沿用原 PDOConnection，不在适配层增加自动失效处理。
      *
      * @param string $sql  SQL 语句
      * @param array  $bind 参数绑定
@@ -112,28 +109,7 @@ trait KingbaseConnection
             $this->resetKingbaseGeneratedKeyContext();
         }
 
-        $result = parent::execute($sql, $bind);
-
-        if ($this->isKingbaseDdl($sql)) {
-            $this->invalidateKingbaseSchemaCache($sql);
-        }
-
-        return $result;
-    }
-
-    /**
-     * 记录结构缓存键，使 DDL 后可以同时清理内存缓存和 PSR-16 字段缓存。
-     *
-     * @param string $tableName 表名
-     * @param bool   $force     是否强制从数据库读取
-     *
-     * @return array 表结构信息
-     */
-    public function getSchemaInfo(string $tableName, bool $force = false): array
-    {
-        $this->kingbaseSchemaCacheKeys[$this->kingbaseSchemaCacheKey($tableName)] = true;
-
-        return parent::getSchemaInfo($tableName, $force);
+        return parent::execute($sql, $bind);
     }
 
     /**
@@ -512,78 +488,6 @@ trait KingbaseConnection
     private function normalizeKingbaseSequence(string $sequence): string
     {
         return strtoupper((string) preg_replace('/[\s`"\[\]]+/', '', trim($sequence)));
-    }
-
-    /**
-     * 判断 SQL 是否可能改变表结构或字段注释。
-     */
-    private function isKingbaseDdl(string $sql): bool
-    {
-        return 1 === preg_match('/^\s*(?:CREATE|ALTER|DROP|TRUNCATE|COMMENT|RENAME)\b/i', $sql);
-    }
-
-    /**
-     * 清理本连接器内存字段信息及已知的 PSR-16 结构缓存项。
-     */
-    private function invalidateKingbaseSchemaCache(string $sql): void
-    {
-        $keys = $this->kingbaseSchemaCacheKeys;
-        $table = $this->extractKingbaseDdlTable($sql);
-        if (null !== $table) {
-            $keys[$this->kingbaseSchemaCacheKey($table)] = true;
-        }
-
-        $this->info = [];
-        if (!empty($this->cache)) {
-            foreach (array_keys($keys) as $key) {
-                $this->cache->delete($key);
-            }
-        }
-        $this->kingbaseSchemaCacheKeys = [];
-    }
-
-    /**
-     * 按父连接器规则计算字段缓存键。
-     */
-    private function kingbaseSchemaCacheKey(string $tableName): string
-    {
-        [$tableName] = explode(' ', trim($tableName), 2);
-        $tableName = str_replace(['`', '"', '[', ']'], '', $tableName);
-        $schema = str_contains($tableName, '.')
-            ? $tableName
-            : $this->getConfig('database') . '.' . $tableName;
-
-        return $this->getSchemaCacheKey($schema);
-    }
-
-    /**
-     * 从常见 DDL 中提取受影响的表名，用于删除跨连接字段缓存。
-     */
-    private function extractKingbaseDdlTable(string $sql): ?string
-    {
-        $patterns = [
-            '/^\s*(?:CREATE|ALTER|DROP|TRUNCATE)\s+(?:TABLE|VIEW)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?([^\s(;]+)/i',
-            '/^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+[^\s]+\s+ON\s+([^\s(]+)/i',
-            '/^\s*COMMENT\s+ON\s+COLUMN\s+([^\s]+)\s+IS\b/i',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (1 !== preg_match($pattern, $sql, $match)) {
-                continue;
-            }
-            $name = str_replace(['`', '"', '[', ']'], '', $match[1]);
-            if (str_starts_with(strtoupper(ltrim($sql)), 'COMMENT ON COLUMN')) {
-                $parts = explode('.', $name);
-                if (count($parts) > 1) {
-                    array_pop($parts);
-                    $name = implode('.', $parts);
-                }
-            }
-
-            return '' === $name ? null : $name;
-        }
-
-        return null;
     }
 
     /**

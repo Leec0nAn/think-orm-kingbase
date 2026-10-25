@@ -181,7 +181,8 @@ SQL;
     /**
      * 使用 SQL Server 兼容语法开启事务。
      *
-     * 最外层执行 BEGIN TRANSACTION；内层建立保存点，便于局部失败后回滚。
+     * 最外层执行 BEGIN TRANSACTION；内层仅增加事务计数，保持原 Sqlsrv
+     * Connector 不使用保存点的逻辑嵌套语义。
      *
      * @return void
      */
@@ -191,8 +192,6 @@ SQL;
 
         if (0 == $this->transTimes) {
             $this->linkID->exec('BEGIN TRANSACTION');
-        } else {
-            $this->linkID->exec($this->parseSavepoint('trans' . ($this->transTimes + 1)));
         }
 
         $this->transTimes++;
@@ -221,7 +220,8 @@ SQL;
     /**
      * 使用 SQL Server 兼容语法回滚事务。
      *
-     * 内层回滚到对应保存点，最外层执行物理 ROLLBACK；SQL 成功后才改变计数。
+     * 最外层执行物理 ROLLBACK；内层仅减少事务计数，不执行局部回滚，
+     * 保持原 Sqlsrv Connector 的事务行为。
      *
      * @return void
      */
@@ -233,8 +233,6 @@ SQL;
         $this->initConnect(true);
         if (1 == $this->transTimes) {
             $this->linkID->exec('ROLLBACK');
-        } else {
-            $this->linkID->exec($this->parseSavepointRollBack('trans' . $this->transTimes));
         }
         $this->transTimes--;
     }

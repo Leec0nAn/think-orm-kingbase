@@ -20,91 +20,6 @@ use think\db\Connection;
 class KingbaseSqlsrv extends Sqlsrv
 {
     /**
-     * A scalar subquery must not expose SQL Server pagination's ROW_NUMBER.
-     */
-    protected string $plainSelectSql = 'SELECT%DISTINCT%%EXTRA% %FIELD% FROM %TABLE%%FORCE%%JOIN%%WHERE%%GROUP%%HAVING%%UNION%%ORDER%%LIMIT% %LOCK%%COMMENT%';
-
-    /** 当前是否正在构造使用 KingbaseES 原生分页的 SELECT。 */
-    protected bool $kingbaseSelect = false;
-
-    /**
-     * 使用 KingbaseES 原生分页构造 SELECT，保留行锁及单列子查询语义。
-     *
-     * 不添加 ROW_NUMBER 辅助列，避免关联聚合或 INSERT SELECT 列数变化；所有 SELECT
-     * 均保留 LOCK、UNION 和 ORDER。finally 恢复状态，支持重入和构造异常后的复用。
-     *
-     * @param Query $query 当前查询对象
-     * @param bool  $one   是否仅查询一条记录
-     *
-     * @return string 完整 SELECT SQL
-     */
-    public function select(Query $query, bool $one = false): string
-    {
-        $selectSql = $this->selectSql;
-        $selectMode = $this->kingbaseSelect;
-        $this->selectSql = $this->plainSelectSql;
-        $this->kingbaseSelect = true;
-        try {
-            return parent::select($query, $one);
-        } finally {
-            $this->selectSql = $selectSql;
-            $this->kingbaseSelect = $selectMode;
-        }
-    }
-
-    /**
-     * SELECT 使用 LIMIT/OFFSET，写语句继续沿用父方言的处理。
-     *
-     * @param Query $query 当前查询对象
-     * @param string $limit 数量或“偏移量,数量”
-     * @return string 分页子句
-     * @throws \InvalidArgumentException 分页参数不是非负整数
-     */
-    protected function parseLimit(Query $query, string $limit): string
-    {
-        if (!$this->kingbaseSelect) {
-            return parent::parseLimit($query, $limit);
-        }
-        if ('' === $limit) {
-            return '';
-        }
-        if (!preg_match('/^\d+(?:,\d+)?$/D', $limit)) {
-            throw new \InvalidArgumentException('Invalid KES pagination: ' . $limit);
-        }
-        $parts = explode(',', $limit);
-        return count($parts) === 2
-            ? ' LIMIT ' . $parts[1] . ' OFFSET ' . $parts[0]
-            : ' LIMIT ' . $parts[0];
-    }
-
-    /**
-     * 原生分页不需要默认随机排序，显式排序仍使用父方言。
-     *
-     * @param Query $query 当前查询对象
-     * @param array $order 排序配置
-     * @return string 排序子句
-     */
-    protected function parseOrder(Query $query, array $order): string
-    {
-        return $this->kingbaseSelect && empty($order) ? '' : parent::parseOrder($query, $order);
-    }
-
-    /**
-     * 构造 INSERT SELECT，避免父实现永久修改共享查询模板。
-     *
-     * @param Query $query 源查询对象
-     * @param array $fields 目标字段列表
-     * @param string $table 目标表名
-     * @return string INSERT SELECT SQL，支持源查询排序与分页
-     */
-    public function selectInsert(Query $query, array $fields, string $table): string
-    {
-        $fields = array_map(fn ($field) => $this->parseKey($query, $field, true), $fields);
-        return 'INSERT INTO ' . $this->parseTable($query, $table)
-            . ' (' . implode(',', $fields) . ') ' . $this->select($query);
-    }
-
-    /**
      * 使用 VALUES 语法构造多行 INSERT。
      *
      * 避免父 SQL Server 方言的 UNION SELECT 批量写法，使 KingbaseES 能依据目标列
@@ -113,8 +28,10 @@ class KingbaseSqlsrv extends Sqlsrv
      * @param Query $query   当前查询对象
      * @param array $dataSet 多行待插入数据
      *
+     * 仅改写父 SQL Server Builder 的 SQL 结构；各行字段和值仍按照原框架的
+     * 数组迭代顺序处理，不在适配层重新排序或增加字段集合校验。
+     *
      * @return string 完整批量 INSERT SQL
-     * @throws \InvalidArgumentException 各行字段集合不一致或为空
      */
     public function insertAll(Query $query, array $dataSet): string
     {
@@ -136,15 +53,7 @@ class KingbaseSqlsrv extends Sqlsrv
             if (null === $insertFields) {
                 $insertFields = array_keys($data);
             }
-            if (!$insertFields || count($data) !== count($insertFields)
-                || array_diff($insertFields, array_keys($data))) {
-                throw new \InvalidArgumentException('KES batch insert requires the same non-empty fields in every row');
-            }
-            $row = [];
-            foreach ($insertFields as $field) {
-                $row[] = $data[$field];
-            }
-            $values[] = '( ' . implode(',', $row) . ' )';
+            $values[] = '( ' . implode(',', array_values($data)) . ' )';
         }
 
         if (null === $insertFields) {
@@ -214,4 +123,5 @@ class KingbaseSqlsrv extends Sqlsrv
             $this->insertAllSql
         );
     }
+
 }

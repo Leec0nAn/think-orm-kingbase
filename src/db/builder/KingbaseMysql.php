@@ -67,22 +67,6 @@ class KingbaseMysql extends Mysql
     }
 
     /**
-     * 构造 MySQL 兼容模式的 REGEXP 条件。
-     *
-     * @param Query  $query 当前查询对象
-     * @param string $key   已解析的字段表达式
-     * @param string $exp   正则运算符
-     * @param mixed  $value 匹配值或绑定占位符
-     * @param string $field 原始字段名，保留父方法接口一致性
-     *
-     * @return string REGEXP 条件 SQL
-     */
-    protected function parseRegexp(Query $query, string $key, string $exp, $value, string $field): string
-    {
-        return $key . ' ' . $exp . ' ' . $this->parseTextValue($query, $value);
-    }
-
-    /**
      * 构造 MySQL 兼容模式的 FIND_IN_SET 条件。
      *
      * @param Query  $query 当前查询对象
