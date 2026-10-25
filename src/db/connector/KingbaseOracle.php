@@ -13,7 +13,7 @@ namespace think\db\connector;
 
 use PDO;
 use think\db\BaseQuery;
-use think\db\connector\concern\KingbaseConnection;
+use think\db\concern\KingbaseConnection;
 
 /**
  * KingbaseES Oracle 兼容模式数据库连接器。

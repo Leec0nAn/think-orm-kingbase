@@ -12,7 +12,7 @@ declare(strict_types=1);
 namespace think\db\connector;
 
 use PDO;
-use think\db\connector\concern\KingbaseConnection;
+use think\db\concern\KingbaseConnection;
 
 /**
  * KingbaseES MySQL 兼容模式数据库连接器。
