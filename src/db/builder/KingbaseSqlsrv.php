@@ -36,7 +36,7 @@ class KingbaseSqlsrv extends Sqlsrv
     public function insertAll(Query $query, array $dataSet): string
     {
         $options = $query->getOptions();
-        $bind    = $query->getFieldsBindType();
+        $bind = $query->getFieldsBindType();
 
         if (empty($options['field']) || '*' == $options['field']) {
             $allowFields = array_keys($bind);
@@ -90,9 +90,9 @@ class KingbaseSqlsrv extends Sqlsrv
     public function insertAllByKeys(Query $query, array $keys, array $datas): string
     {
         $options = $query->getOptions();
-        $bind    = $query->getFieldsBindType();
-        $fields  = [];
-        $values  = [];
+        $bind = $query->getFieldsBindType();
+        $fields = [];
+        $values = [];
 
         foreach ($keys as $field) {
             $fields[] = $this->parseKey($query, $field);

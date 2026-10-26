@@ -34,14 +34,14 @@ final class KingbaseModeDetector
     public static function detect(array $config): string
     {
         $probeConfig = self::firstEndpoint($config);
-        $dsn         = self::buildDsn($probeConfig);
-        $params      = is_array($probeConfig['params'] ?? null) ? $probeConfig['params'] : [];
-        $params      = $params + [
-            PDO::ATTR_CASE              => PDO::CASE_LOWER,
-            PDO::ATTR_ERRMODE           => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_ORACLE_NULLS      => PDO::NULL_NATURAL,
+        $dsn = self::buildDsn($probeConfig);
+        $params = is_array($probeConfig['params'] ?? null) ? $probeConfig['params'] : [];
+        $params = $params + [
+            PDO::ATTR_CASE => PDO::CASE_LOWER,
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_ORACLE_NULLS => PDO::NULL_NATURAL,
             PDO::ATTR_STRINGIFY_FETCHES => false,
-            PDO::ATTR_EMULATE_PREPARES  => false,
+            PDO::ATTR_EMULATE_PREPARES => false,
         ];
 
         try {
@@ -96,10 +96,10 @@ final class KingbaseModeDetector
     public static function connectorType(string $mode): string
     {
         return match (self::normalizeMode($mode)) {
-            'mysql'     => 'kingbaseMysql',
-            'oracle'    => 'kingbaseOracle',
+            'mysql' => 'kingbaseMysql',
+            'oracle' => 'kingbaseOracle',
             'sqlserver' => 'kingbaseSqlsrv',
-            default     => throw new \InvalidArgumentException('Unsupported KES database_mode: ' . $mode),
+            default => throw new \InvalidArgumentException('Unsupported KES database_mode: ' . $mode),
         };
     }
 
@@ -134,11 +134,11 @@ final class KingbaseModeDetector
         $mode = strtolower(trim($mode));
 
         return match ($mode) {
-            'mysql', 'kingbasemysql'                         => 'mysql',
-            'oracle', 'kingbaseoracle'                       => 'oracle',
+            'mysql', 'kingbasemysql' => 'mysql',
+            'oracle', 'kingbaseoracle' => 'oracle',
             'sqlsrv', 'sqlserver', 'kingbasesqlsrv',
-            'kingbasesqlserver'                              => 'sqlserver',
-            default                                          => '',
+            'kingbasesqlserver' => 'sqlserver',
+            default => '',
         };
     }
 

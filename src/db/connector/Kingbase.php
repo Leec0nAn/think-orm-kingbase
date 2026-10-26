@@ -37,11 +37,11 @@ class Kingbase implements ConnectionInterface
      */
     public function __construct(array $config = [])
     {
-        $this->mode                = KingbaseModeDetector::detect($config);
-        $config['kingbase_mode']   = $this->mode;
-        $config['type']            = KingbaseModeDetector::connectorType($this->mode);
-        $class                     = $this->resolveConnectorClass($this->mode);
-        $this->connector           = new $class($config);
+        $this->mode = KingbaseModeDetector::detect($config);
+        $config['kingbase_mode'] = $this->mode;
+        $config['type'] = KingbaseModeDetector::connectorType($this->mode);
+        $class = $this->resolveConnectorClass($this->mode);
+        $this->connector = new $class($config);
     }
 
     /**
@@ -70,10 +70,10 @@ class Kingbase implements ConnectionInterface
     private function resolveConnectorClass(string $mode): string
     {
         return match ($mode) {
-            'mysql'     => KingbaseMysql::class,
-            'oracle'    => KingbaseOracle::class,
+            'mysql' => KingbaseMysql::class,
+            'oracle' => KingbaseOracle::class,
             'sqlserver' => KingbaseSqlsrv::class,
-            default     => throw new \InvalidArgumentException('Unsupported KES database_mode: ' . $mode),
+            default => throw new \InvalidArgumentException('Unsupported KES database_mode: ' . $mode),
         };
     }
 

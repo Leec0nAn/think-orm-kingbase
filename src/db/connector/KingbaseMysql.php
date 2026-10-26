@@ -52,18 +52,18 @@ class KingbaseMysql extends Mysql
     public function getFields(string $tableName): array
     {
         [$tableName] = explode(' ', $tableName);
-        $tableName   = trim($tableName, '`"');
+        $tableName = trim($tableName, '`"');
 
         if (str_contains($tableName, '.')) {
             [$schema, $tableName] = explode('.', $tableName, 2);
-            $schema               = trim($schema, '`"');
-            $tableName            = trim($tableName, '`"');
+            $schema = trim($schema, '`"');
+            $tableName = trim($tableName, '`"');
         } else {
             $schema = $this->getSchemaName();
         }
 
         $schemaValue = $this->quoteString($schema);
-        $tableValue  = $this->quoteString($tableName);
+        $tableValue = $this->quoteString($tableName);
 
         $sql = <<<SQL
 SELECT
@@ -113,23 +113,23 @@ ORDER BY
     c.ordinal_position
 SQL;
 
-        $pdo    = $this->getPDOStatement($sql);
+        $pdo = $this->getPDOStatement($sql);
         $result = $pdo->fetchAll(PDO::FETCH_ASSOC);
-        $info   = [];
+        $info = [];
 
         foreach ($result as $val) {
-            $val   = array_change_key_case($val);
+            $val = array_change_key_case($val);
             $field = $val['field'];
 
             $info[$field] = [
-                'name'     => $field,
-                'type'     => $val['full_type'] ?: $val['type'],
-                'notnull'  => 'NO' === strtoupper((string) $val['is_nullable']),
-                'default'  => $val['default'],
-                'primary'  => (bool) $val['primary'],
-                'autoinc'  => '' !== (string) $val['attidentity'] || !empty($val['serial_sequence']),
+                'name' => $field,
+                'type' => $val['full_type'] ?: $val['type'],
+                'notnull' => 'NO' === strtoupper((string) $val['is_nullable']),
+                'default' => $val['default'],
+                'primary' => (bool) $val['primary'],
+                'autoinc' => '' !== (string) $val['attidentity'] || !empty($val['serial_sequence']),
                 'sequence' => $val['serial_sequence'] ?: null,
-                'comment'  => $val['comment'],
+                'comment' => $val['comment'],
             ];
         }
 
@@ -145,9 +145,9 @@ SQL;
      */
     public function getTables(string $dbName = ''): array
     {
-        $schema      = $dbName ?: $this->getSchemaName();
+        $schema = $dbName ?: $this->getSchemaName();
         $schemaValue = $this->quoteString($schema);
-        $sql         = <<<SQL
+        $sql = <<<SQL
 SELECT table_name
 FROM information_schema.tables
 WHERE table_schema = {$schemaValue}
@@ -155,7 +155,7 @@ WHERE table_schema = {$schemaValue}
 ORDER BY table_name
 SQL;
 
-        $pdo    = $this->getPDOStatement($sql);
+        $pdo = $this->getPDOStatement($sql);
         $result = $pdo->fetchAll(PDO::FETCH_ASSOC);
 
         return array_column($result, 'table_name');
@@ -174,7 +174,7 @@ SQL;
     public function getAutoID(?string $sequence = null)
     {
         return $this->resolveKingbaseGeneratedKey(function () {
-            $pdo    = $this->linkID->query('SELECT LAST_INSERT_ID() AS id');
+            $pdo = $this->linkID->query('SELECT LAST_INSERT_ID() AS id');
             $result = $pdo->fetch(PDO::FETCH_ASSOC);
 
             return isset($result['id']) ? (string) $result['id'] : '';

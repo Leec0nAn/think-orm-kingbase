@@ -32,11 +32,11 @@ class KingbaseOracle extends Oracle
      * @var array
      */
     protected $params = [
-        PDO::ATTR_CASE              => PDO::CASE_LOWER,
-        PDO::ATTR_ERRMODE           => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_ORACLE_NULLS      => PDO::NULL_NATURAL,
+        PDO::ATTR_CASE => PDO::CASE_LOWER,
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_ORACLE_NULLS => PDO::NULL_NATURAL,
         PDO::ATTR_STRINGIFY_FETCHES => false,
-        PDO::ATTR_EMULATE_PREPARES  => false,
+        PDO::ATTR_EMULATE_PREPARES => false,
     ];
 
     /**
@@ -75,7 +75,7 @@ class KingbaseOracle extends Oracle
 
         if (null === $owner) {
             $tableValue = $this->quoteString($tableName);
-            $sql        = <<<SQL
+            $sql = <<<SQL
 SELECT
     c.column_name AS "field",
     c.data_type AS "type",
@@ -110,7 +110,7 @@ SQL;
         } else {
             $ownerValue = $this->quoteString($owner);
             $tableValue = $this->quoteString($tableName);
-            $sql        = <<<SQL
+            $sql = <<<SQL
 SELECT
     c.column_name AS "field",
     c.data_type AS "type",
@@ -149,24 +149,24 @@ ORDER BY
 SQL;
         }
 
-        $pdo             = $this->getPDOStatement($sql);
-        $result          = $pdo->fetchAll(PDO::FETCH_ASSOC);
-        $info            = [];
+        $pdo = $this->getPDOStatement($sql);
+        $result = $pdo->fetchAll(PDO::FETCH_ASSOC);
+        $info = [];
         $generatedFields = $this->getGeneratedFields($owner ?? $this->getKingbaseSchema(), $tableName);
 
         foreach ($result as $val) {
-            $val   = array_change_key_case($val);
+            $val = array_change_key_case($val);
             $field = strtolower($val['field']);
 
             $info[$field] = [
-                'name'     => $field,
-                'type'     => $val['type'],
-                'notnull'  => 'N' === strtoupper((string) $val['nullable']),
-                'default'  => $val['default'],
-                'primary'  => (bool) $val['primary'],
-                'autoinc'  => array_key_exists($field, $generatedFields),
+                'name' => $field,
+                'type' => $val['type'],
+                'notnull' => 'N' === strtoupper((string) $val['nullable']),
+                'default' => $val['default'],
+                'primary' => (bool) $val['primary'],
+                'autoinc' => array_key_exists($field, $generatedFields),
                 'sequence' => $generatedFields[$field] ?? null,
-                'comment'  => $val['comment'],
+                'comment' => $val['comment'],
             ];
         }
 
@@ -233,7 +233,7 @@ ORDER BY table_name
 SQL;
         } else {
             $ownerValue = $this->quoteString($this->normalizeOracleName($dbName));
-            $sql        = <<<SQL
+            $sql = <<<SQL
 SELECT table_name
 FROM all_tables
 WHERE owner = {$ownerValue}
@@ -251,7 +251,7 @@ ORDER BY table_name
 SQL;
         }
 
-        $pdo    = $this->getPDOStatement($sql);
+        $pdo = $this->getPDOStatement($sql);
         $result = $pdo->fetchAll(PDO::FETCH_ASSOC);
 
         return array_map('current', $result);
@@ -277,7 +277,7 @@ SQL;
 
         return $this->resolveKingbaseGeneratedKey(function () use ($sequence) {
             $sequence = $this->parseSequenceName($sequence);
-            $pdo      = $this->linkID->query("SELECT {$sequence}.CURRVAL AS id FROM dual");
+            $pdo = $this->linkID->query("SELECT {$sequence}.CURRVAL AS id FROM dual");
 
             return $pdo->fetchColumn();
         });

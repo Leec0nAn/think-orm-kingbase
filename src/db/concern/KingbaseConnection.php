@@ -71,7 +71,7 @@ trait KingbaseConnection
             return $pdo;
         } catch (\PDOException $e) {
             $message = $this->formatKingbaseConnectionFailure($mergedConfig, $e);
-            $code    = is_numeric($e->getCode()) ? (int) $e->getCode() : 0;
+            $code = is_numeric($e->getCode()) ? (int) $e->getCode() : 0;
 
             throw new \PDOException($message, $code, $e);
         }
@@ -85,7 +85,7 @@ trait KingbaseConnection
     public function close()
     {
         $this->kingbaseInitializedLinks = [];
-        $this->kingbaseResolvedSchema   = '';
+        $this->kingbaseResolvedSchema = '';
         $this->resetKingbaseGeneratedKeyContext();
 
         return parent::close();
@@ -262,9 +262,9 @@ trait KingbaseConnection
     public function getFieldBindType(string $type): int
     {
         return match ($type) {
-            'kingbase_lob'        => PDO::PARAM_LOB,
+            'kingbase_lob' => PDO::PARAM_LOB,
             'kingbase_bit_string' => PDO::PARAM_STR,
-            default               => parent::getFieldBindType($type),
+            default => parent::getFieldBindType($type),
         };
     }
 
@@ -291,7 +291,7 @@ trait KingbaseConnection
             return $empty;
         }
 
-        $this->kingbaseGeneratedKey       = $value;
+        $this->kingbaseGeneratedKey = $value;
         $this->kingbaseGeneratedKeyCached = true;
 
         return $value;
@@ -344,8 +344,8 @@ trait KingbaseConnection
         $configuredSchema = trim((string) ($config['schema'] ?? ''));
         if ('' !== $configuredSchema) {
             $configuredSchema = $this->validateKingbaseIdentifier($configuredSchema, 'schema');
-            $quotedSchema     = '"' . str_replace('"', '""', $configuredSchema) . '"';
-            $searchPath       = 'public' === strtolower($configuredSchema)
+            $quotedSchema = '"' . str_replace('"', '""', $configuredSchema) . '"';
+            $searchPath = 'public' === strtolower($configuredSchema)
                 ? $quotedSchema
                 : $quotedSchema . ', public';
 
@@ -371,7 +371,7 @@ trait KingbaseConnection
             );
         }
 
-        $this->kingbaseResolvedSchema        = $currentSchema;
+        $this->kingbaseResolvedSchema = $currentSchema;
         $this->kingbaseInitializedLinks[$hash] = true;
     }
 
@@ -382,14 +382,14 @@ trait KingbaseConnection
     {
         $this->resetKingbaseGeneratedKeyContext();
 
-        $options  = $query->getOptions();
-        $data     = is_array($options['data'] ?? null) ? $options['data'] : [];
+        $options = $query->getOptions();
+        $data = is_array($options['data'] ?? null) ? $options['data'] : [];
         $sequence = trim((string) ($options['sequence'] ?? ''));
-        $mode     = $this->getExpectedKingbaseMode();
+        $mode = $this->getExpectedKingbaseMode();
 
         if ('oracle' === $mode && '' !== $sequence && $this->dataUsesKingbaseSequence($data, $sequence)) {
             $this->kingbaseGeneratedKeyExpected = true;
-            $this->kingbaseInsertSequence       = $sequence;
+            $this->kingbaseInsertSequence = $sequence;
             return;
         }
 
@@ -420,7 +420,7 @@ trait KingbaseConnection
         }
 
         $this->kingbaseGeneratedKeyExpected = true;
-        $this->kingbaseInsertSequence       = $metadataSequence;
+        $this->kingbaseInsertSequence = $metadataSequence;
     }
 
     /**
@@ -429,9 +429,9 @@ trait KingbaseConnection
     protected function resetKingbaseGeneratedKeyContext(): void
     {
         $this->kingbaseGeneratedKeyExpected = false;
-        $this->kingbaseGeneratedKey         = null;
-        $this->kingbaseGeneratedKeyCached   = false;
-        $this->kingbaseInsertSequence       = null;
+        $this->kingbaseGeneratedKey = null;
+        $this->kingbaseGeneratedKeyCached = false;
+        $this->kingbaseInsertSequence = null;
     }
 
     /**
@@ -530,7 +530,7 @@ trait KingbaseConnection
             }
         }
 
-        $message  = $exception->getMessage();
+        $message = $exception->getMessage();
         $password = (string) ($config['password'] ?? '');
         if ('' !== $password) {
             $message = str_replace($password, '***', $message);

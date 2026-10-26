@@ -29,7 +29,7 @@ class KingbaseOracle extends Oracle
     public function insertAll(Query $query, array $dataSet): string
     {
         $options = $query->getOptions();
-        $bind    = $query->getFieldsBindType();
+        $bind = $query->getFieldsBindType();
 
         if (empty($options['field']) || '*' == $options['field']) {
             $allowFields = array_keys($bind);
@@ -37,7 +37,7 @@ class KingbaseOracle extends Oracle
             $allowFields = $options['field'];
         }
 
-        $values       = [];
+        $values = [];
         $insertFields = null;
 
         foreach ($dataSet as $data) {
@@ -76,9 +76,9 @@ class KingbaseOracle extends Oracle
     public function insertAllByKeys(Query $query, array $keys, array $datas): string
     {
         $options = $query->getOptions();
-        $bind    = $query->getFieldsBindType();
-        $fields  = [];
-        $values  = [];
+        $bind = $query->getFieldsBindType();
+        $fields = [];
+        $values = [];
 
         foreach ($keys as $field) {
             $fields[] = $this->parseKey($query, $field);

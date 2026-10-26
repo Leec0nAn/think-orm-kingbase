@@ -72,23 +72,23 @@ class KingbaseSqlsrv extends Sqlsrv
         [$tableName] = explode(' ', $tableName);
         [$schema, $tableName] = $this->parseSqlsrvTable($tableName);
 
-        $result   = $this->getColumnRows($schema, $tableName);
+        $result = $this->getColumnRows($schema, $tableName);
         $comments = $this->getColumnComments($schema, $tableName);
-        $info     = [];
+        $info = [];
 
         foreach ($result as $val) {
-            $val   = array_change_key_case($val);
+            $val = array_change_key_case($val);
             $field = strtolower($val['field']);
 
             $info[$field] = [
-                'name'     => $field,
-                'type'     => $val['type'],
-                'notnull'  => 'NO' === strtoupper((string) $val['is_nullable']),
-                'default'  => $val['default'],
-                'primary'  => false,
-                'autoinc'  => false,
+                'name' => $field,
+                'type' => $val['type'],
+                'notnull' => 'NO' === strtoupper((string) $val['is_nullable']),
+                'default' => $val['default'],
+                'primary' => false,
+                'autoinc' => false,
                 'sequence' => null,
-                'comment'  => $comments[$field] ?? null,
+                'comment' => $comments[$field] ?? null,
             ];
         }
 
@@ -120,9 +120,9 @@ class KingbaseSqlsrv extends Sqlsrv
      */
     public function getTables(string $dbName = ''): array
     {
-        $schema      = $dbName ?: $this->getSchemaName();
+        $schema = $dbName ?: $this->getSchemaName();
         $schemaValue = $this->quoteString($schema);
-        $sql         = <<<SQL
+        $sql = <<<SQL
 SELECT table_name
 FROM information_schema.tables
 WHERE table_schema = {$schemaValue}
@@ -140,7 +140,7 @@ WHERE table_schema = {$schemaValue}
 ORDER BY table_name
 SQL;
 
-        $pdo    = $this->getPDOStatement($sql);
+        $pdo = $this->getPDOStatement($sql);
         $result = $pdo->fetchAll(PDO::FETCH_ASSOC);
 
         return array_column($result, 'table_name');
@@ -162,9 +162,9 @@ SQL;
         return $this->resolveKingbaseGeneratedKey(function () {
             foreach (['SELECT SCOPE_IDENTITY() AS id', 'SELECT @@IDENTITY AS id'] as $sql) {
                 try {
-                    $pdo    = $this->linkID->query($sql);
+                    $pdo = $this->linkID->query($sql);
                     $result = $pdo->fetch(PDO::FETCH_ASSOC);
-                    $id     = is_array($result) ? ($result['id'] ?? current($result)) : '';
+                    $id = is_array($result) ? ($result['id'] ?? current($result)) : '';
 
                     if ('' !== $id && false !== $id && null !== $id) {
                         return (string) $id;
@@ -291,7 +291,7 @@ SQL;
     protected function getColumnRows(string $schema, string $tableName): array
     {
         $schemaValue = $this->quoteString($schema);
-        $tableValue  = $this->quoteString($tableName);
+        $tableValue = $this->quoteString($tableName);
 
         $sql = <<<SQL
 SELECT
@@ -308,7 +308,7 @@ ORDER BY
     c.ordinal_position
 SQL;
 
-        $pdo    = $this->getPDOStatement($sql);
+        $pdo = $this->getPDOStatement($sql);
         $result = $pdo->fetchAll(PDO::FETCH_ASSOC);
 
         return $result;
@@ -325,7 +325,7 @@ SQL;
     protected function getColumnComments(string $schema, string $tableName): array
     {
         $schemaValue = $this->quoteString($schema);
-        $tableValue  = $this->quoteString($tableName);
+        $tableValue = $this->quoteString($tableName);
         $sql = <<<SQL
 SELECT a.attname AS "field", d.description AS "comment"
 FROM pg_namespace n
@@ -368,8 +368,8 @@ SQL;
     protected function getPrimaryFields(string $schema, string $tableName): array
     {
         $schemaValue = $this->quoteString($schema);
-        $tableValue  = $this->quoteString($tableName);
-        $sql         = <<<SQL
+        $tableValue = $this->quoteString($tableName);
+        $sql = <<<SQL
 SELECT kcu.column_name
 FROM information_schema.table_constraints tc
 JOIN information_schema.key_column_usage kcu
@@ -384,7 +384,7 @@ WHERE tc.constraint_type = 'PRIMARY KEY'
 ORDER BY kcu.ordinal_position
 SQL;
 
-        $pdo    = $this->getPDOStatement($sql);
+        $pdo = $this->getPDOStatement($sql);
         $result = $pdo->fetchAll(PDO::FETCH_ASSOC);
 
         return array_map('current', $result);
@@ -400,16 +400,16 @@ SQL;
      */
     protected function getIdentityFields(string $schema, string $tableName): array
     {
-        $objectName  = $schema . '.' . $tableName;
+        $objectName = $schema . '.' . $tableName;
         $objectValue = $this->quoteString($objectName);
-        $sql         = <<<SQL
+        $sql = <<<SQL
 SELECT c.name
 FROM sys.columns c
 WHERE c.object_id = OBJECT_ID({$objectValue})
   AND c.is_identity = 1
 SQL;
 
-        $pdo    = $this->getPDOStatement($sql);
+        $pdo = $this->getPDOStatement($sql);
         $result = $pdo->fetchAll(PDO::FETCH_ASSOC);
 
         return array_map('current', $result);
