@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace think\db\builder;
 
 use think\db\BaseQuery as Query;
+use think\db\Connection;
 use think\db\Raw;
 
 /**
@@ -20,10 +21,11 @@ use think\db\Raw;
 class KingbaseMysql extends Mysql
 {
     /**
-     * 生成数据字段的参数占位符，并适配 JSON 路径更新。
+     * 生成写入参数占位符，适配整数列的布尔绑定。
      *
-     * KingbaseES MySQL 兼容函数有时无法推断 JSON 路径更新值对应的 PDO 占位符
-     * 类型，因此将该占位符显式转换为 TEXT；普通字段沿用父构造器行为。
+     * Model 的 bool 配置可能覆盖整数列的绑定类型；此时按实际字段绑定信息
+     * 使用 1/0 整数参数，避免 PDO_KDB
+     * 发送 t/f。真正的 BOOLEAN 列、NULL 和其他绑定类型仍沿用原处理。
      *
      * @param Query  $query 当前查询对象
      * @param string $key   字段名或 JSON 路径
@@ -34,51 +36,18 @@ class KingbaseMysql extends Mysql
      */
     protected function parseDataBind(Query $query, string $key, $data, array $bind = []): string
     {
-        $placeholder = parent::parseDataBind($query, $key, $data, $bind);
-
-        if (str_contains($key, '->')) {
-            return 'CAST(' . $placeholder . ' AS TEXT)';
+        if (null !== $data && !($data instanceof Raw) && !str_contains($key, '->')
+            && Connection::PARAM_BOOL === ($bind[$key] ?? null)) {
+            // 读取连接器已有的字段缓存，不使用被 Model 类型配置覆盖的字段映射。
+            $table = $query->getTable();
+            $fieldBind = is_string($table) || (is_array($table) && 1 === count($table))
+                ? $query->getConnection()->getTableInfo($table, 'bind') : [];
+            if (Connection::PARAM_INT === ($fieldBind[$key] ?? null)) {
+                $data = $data ? 1 : 0;
+                $bind[$key] = Connection::PARAM_INT;
+            }
         }
 
-        return $placeholder;
-    }
-
-    /**
-     * 将兼容函数使用的字符串占位符显式转换为 TEXT。
-     *
-     * Raw 表达式保持原样解析，冒号开头的绑定占位符增加 CAST，其余值直接转为字符串。
-     *
-     * @param Query $query 当前查询对象
-     * @param mixed $value 原始值、占位符或 Raw 表达式
-     *
-     * @return string 可拼入 SQL 的文本表达式
-     */
-    protected function parseTextValue(Query $query, $value): string
-    {
-        if ($value instanceof Raw) {
-            return $this->parseRaw($query, $value);
-        }
-
-        if (is_string($value) && str_starts_with($value, ':')) {
-            return 'CAST(' . $value . ' AS TEXT)';
-        }
-
-        return (string) $value;
-    }
-
-    /**
-     * 构造 MySQL 兼容模式的 FIND_IN_SET 条件。
-     *
-     * @param Query  $query 当前查询对象
-     * @param string $key   已解析的字段表达式
-     * @param string $exp   查询运算符，保留父方法接口一致性
-     * @param mixed  $value 待查找值或绑定占位符
-     * @param string $field 原始字段名，保留父方法接口一致性
-     *
-     * @return string FIND_IN_SET 函数 SQL
-     */
-    protected function parseFindInSet(Query $query, string $key, string $exp, $value, string $field): string
-    {
-        return 'FIND_IN_SET(' . $this->parseTextValue($query, $value) . ', ' . $key . ')';
+        return parent::parseDataBind($query, $key, $data, $bind);
     }
 }

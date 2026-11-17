@@ -47,7 +47,6 @@ class Kingbase implements ConnectionInterface
     /**
      * 返回自动探测后使用的模式专用连接器。
      *
-     * 该方法主要用于诊断和测试；业务查询仍通过统一入口调用。
      */
     public function getResolvedConnector(): ConnectionInterface
     {
@@ -77,31 +76,31 @@ class Kingbase implements ConnectionInterface
         };
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将查询类名获取请求转交模式专用连接器。 */
     public function getQueryClass(): string
     {
         return $this->connector->getQueryClass();
     }
 
-    /** {@inheritdoc} */
-    public function connect(array $config = [], $linkNum = 0)
+    /** {@inheritdoc} 将连接建立请求转交模式专用连接器。 */
+    public function connect(array $config = [], $linkNum = 0, $autoConnection = false)
     {
-        return $this->connector->connect($config, $linkNum);
+        return $this->connector->connect($config, $linkNum, $autoConnection);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将数据库管理器设置转交模式专用连接器。 */
     public function setDb(DbManager $db)
     {
         $this->connector->setDb($db);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将缓存对象设置转交模式专用连接器。 */
     public function setCache(CacheInterface $cache)
     {
         $this->connector->setCache($cache);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将连接配置读取请求转交模式专用连接器。 */
     public function getConfig(string $config = '')
     {
         return $this->connector->getConfig($config);
@@ -119,91 +118,91 @@ class Kingbase implements ConnectionInterface
         return $this;
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将单条记录查询转交模式专用连接器。 */
     public function find(BaseQuery $query): array
     {
         return $this->connector->find($query);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将多条记录查询转交模式专用连接器。 */
     public function select(BaseQuery $query): array
     {
         return $this->connector->select($query);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将单条数据插入转交模式专用连接器。 */
     public function insert(BaseQuery $query, bool $getLastInsID = false)
     {
         return $this->connector->insert($query, $getLastInsID);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将批量数据插入转交模式专用连接器。 */
     public function insertAll(BaseQuery $query, array $dataSet = []): int
     {
         return $this->connector->insertAll($query, $dataSet);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将数据更新转交模式专用连接器。 */
     public function update(BaseQuery $query): int
     {
         return $this->connector->update($query);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将数据删除转交模式专用连接器。 */
     public function delete(BaseQuery $query): int
     {
         return $this->connector->delete($query);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将单个字段值查询转交模式专用连接器。 */
     public function value(BaseQuery $query, string $field, $default = null)
     {
         return $this->connector->value($query, $field, $default);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将指定列数据查询转交模式专用连接器。 */
     public function column(BaseQuery $query, string|array $column, string $key = ''): array
     {
         return $this->connector->column($query, $column, $key);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将闭包事务处理转交模式专用连接器。 */
     public function transaction(callable $callback)
     {
         return $this->connector->transaction($callback);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将事务开始操作转交模式专用连接器。 */
     public function startTrans()
     {
         return $this->connector->startTrans();
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将事务提交操作转交模式专用连接器。 */
     public function commit()
     {
         return $this->connector->commit();
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将事务回滚操作转交模式专用连接器。 */
     public function rollback()
     {
         return $this->connector->rollback();
     }
 
-    /** {@inheritdoc} */
-    public function getTableFields(string $tableName): array
+    /** {@inheritdoc} 保留原连接器接受的表名及数组别名形式。 */
+    public function getTableFields($tableName): array
     {
         return $this->connector->getTableFields($tableName);
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将最近执行的 SQL 读取请求转交模式专用连接器。 */
     public function getLastSql(): string
     {
         return $this->connector->getLastSql();
     }
 
-    /** {@inheritdoc} */
+    /** {@inheritdoc} 将新增主键值读取请求转交模式专用连接器。 */
     public function getLastInsID(BaseQuery $query, ?string $sequence = null)
     {
         return $this->connector->getLastInsID($query, $sequence);

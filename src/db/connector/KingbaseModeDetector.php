@@ -59,9 +59,16 @@ final class KingbaseModeDetector
                 );
             }
 
-            $mode = self::normalizeMode((string) $pdo
-                ->query("SELECT current_setting('database_mode', true)")
-                ->fetchColumn());
+            $statement = $pdo->query("SELECT current_setting('database_mode', true)");
+            // 静默或警告模式下，查询失败返回 false，而不是抛出 PDO 异常。
+            if (false === $statement) {
+                $errorInfo = $pdo->errorInfo();
+                $failure = new \PDOException('KES mode query failed [' . ($errorInfo[0] ?? 'HY000')
+                    . ']: ' . ($errorInfo[2] ?? 'PDO::query() returned false'));
+                $failure->errorInfo = $errorInfo;
+                throw $failure;
+            }
+            $mode = self::normalizeMode((string) $statement->fetchColumn());
             $pdo = null;
         } catch (\PDOException $exception) {
             $message = self::sanitizeDiagnostic($exception->getMessage(), (string) ($probeConfig['password'] ?? ''));
@@ -71,9 +78,11 @@ final class KingbaseModeDetector
                 self::sanitizeDiagnostic((string) ($probeConfig['hostport'] ?? ''), ''),
                 self::sanitizeDiagnostic((string) ($probeConfig['database'] ?? ''), '')
             );
-            $code = is_numeric($exception->getCode()) ? (int) $exception->getCode() : 0;
-
-            throw new \PDOException('KES mode detection failed (' . $details . '): ' . $message, $code, $exception);
+            throw KingbaseConnectionDiagnostics::exception(
+                'KES mode detection failed (' . $details . '): ' . $message,
+                $exception,
+                (string) ($probeConfig['password'] ?? '')
+            );
         }
 
         if ('' === $mode) {
@@ -147,13 +156,13 @@ final class KingbaseModeDetector
      */
     private static function firstEndpoint(array $config): array
     {
-        foreach (['hostname', 'hostport', 'database', 'username', 'password', 'dsn'] as $key) {
+        foreach (['hostname', 'hostport', 'database', 'username', 'password', 'dsn', 'charset'] as $key) {
             if (!isset($config[$key])) {
                 continue;
             }
             if (is_array($config[$key])) {
                 $config[$key] = reset($config[$key]);
-            } elseif (is_string($config[$key]) && str_contains($config[$key], ',')) {
+            } elseif (!empty($config['deploy']) && is_string($config[$key]) && str_contains($config[$key], ',')) {
                 $config[$key] = explode(',', $config[$key], 2)[0];
             }
         }

@@ -12,51 +12,62 @@ declare(strict_types=1);
 namespace think\db\concern;
 
 use PDO;
-use think\db\BaseQuery;
-use think\db\Raw;
 
 /**
  * KingbaseES 三种兼容模式连接器共用的 PDO_KDB 初始化逻辑。
  */
 trait KingbaseConnection
 {
+    use KingbaseResult;
+
     /**
-     * Initialized PDO object hashes.
+     * 已完成初始化的 PDO 对象，按对象哈希去重。
      *
      * @var array<string, bool>
      */
     protected array $kingbaseInitializedLinks = [];
 
     /**
-     * Schema discovered from the current PDO_KDB session.
+     * 根据 ThinkORM 连接配置生成三个兼容模式共用的 PDO_KDB DSN。
+     *
+     * @param array $config 数据库连接配置
+     *
+     * @return string kdb: 协议 DSN
      */
-    protected string $kingbaseResolvedSchema = '';
+    protected function parseDsn(array $config): string
+    {
+        $dsn = 'kdb:host=' . $config['hostname'] . ';dbname=' . $config['database'];
 
-    /** 当前 INSERT 是否真实具备数据库生成主键的语义。 */
-    protected bool $kingbaseGeneratedKeyExpected = false;
+        if (!empty($config['hostport'])) {
+            $dsn .= ';port=' . $config['hostport'];
+        }
 
-    /** 当前 INSERT 已读取到的生成主键，供 Model 后续再次读取。 */
-    protected mixed $kingbaseGeneratedKey = null;
+        return $dsn;
+    }
 
-    /** 当前 INSERT 的生成主键是否已成功读取。 */
-    protected bool $kingbaseGeneratedKeyCached = false;
+    /** MySQL 结果转换需要跟随运行时设置；其余模式保留原 PDO 创建流程。 */
+    protected function createPdo($dsn, $username, $password, $params)
+    {
+        if ('mysql' === $this->getExpectedKingbaseMode()) {
+            return new \think\db\connector\KingbasePDO($dsn, $username, $password, $params);
+        }
 
-    /** 当前 Oracle INSERT 实际使用或由字段默认值解析出的序列。 */
-    protected ?string $kingbaseInsertSequence = null;
+        return parent::createPdo($dsn, $username, $password, $params);
+    }
 
     /**
      * 建立 PDO_KDB 连接并初始化 KingbaseES 会话。
      *
-     * 在父连接器完成物理连接后校验驱动、数据库兼容模式和 Schema；连接失败时补充
-     * 主机、端口及数据库名等诊断信息，同时对口令脱敏并保留原始 PDOException。
+     * 在父连接器完成物理连接后校验驱动、数据库兼容模式并读取会话默认 Schema；连接失败时补充
+     * 主机、端口及数据库名等诊断信息，同时保留 PDO 异常类型和安全错误信息，避免异常链泄露口令。
      *
      * @param array      $config         本次连接覆盖配置，为空时使用连接器默认配置
      * @param int        $linkNum        连接编号，用于读写分离或多连接场景
      * @param array|bool $autoConnection 自动连接配置或是否启用自动连接
      *
      * @throws \PDOException             物理连接失败
-     * @throws \UnexpectedValueException 驱动、兼容模式或 Schema 与配置不一致
-     * @throws \InvalidArgumentException Schema 标识符不合法
+     * @throws \UnexpectedValueException 驱动或兼容模式不符合预期
+     * @throws \InvalidArgumentException 当前会话的 Schema 标识符不合法
      *
      * @return PDO 已完成 KingbaseES 会话初始化的 PDO 对象
      */
@@ -66,14 +77,16 @@ trait KingbaseConnection
 
         try {
             $pdo = parent::connect($config, $linkNum, $autoConnection);
-            $this->initializeKingbaseSession($pdo, $mergedConfig);
+            $this->initializeKingbaseSession($pdo);
 
             return $pdo;
         } catch (\PDOException $e) {
             $message = $this->formatKingbaseConnectionFailure($mergedConfig, $e);
-            $code = is_numeric($e->getCode()) ? (int) $e->getCode() : 0;
-
-            throw new \PDOException($message, $code, $e);
+            throw \think\db\connector\KingbaseConnectionDiagnostics::exception(
+                $message,
+                $e,
+                (string) ($mergedConfig['password'] ?? '')
+            );
         }
     }
 
@@ -85,88 +98,8 @@ trait KingbaseConnection
     public function close()
     {
         $this->kingbaseInitializedLinks = [];
-        $this->kingbaseResolvedSchema = '';
-        $this->resetKingbaseGeneratedKeyContext();
 
         return parent::close();
-    }
-
-    /**
-     * 执行原生 SQL，并在原生写入前清理 ORM 生成主键上下文。
-     *
-     * 原生 INSERT 无法从 Query 元数据确认主键生成语义，因此先清除上一次 ORM
-     * INSERT 的生成键上下文，避免随后 getLastInsID() 返回历史值。DDL 后的字段
-     * 缓存行为继续沿用原 PDOConnection，不在适配层增加自动失效处理。
-     *
-     * @param string $sql  SQL 语句
-     * @param array  $bind 参数绑定
-     *
-     * @return int 影响行数
-     */
-    public function execute(string $sql, array $bind = []): int
-    {
-        if (1 === preg_match('/^\s*(?:INSERT|REPLACE|MERGE)\b/i', $sql)) {
-            $this->resetKingbaseGeneratedKeyContext();
-        }
-
-        return parent::execute($sql, $bind);
-    }
-
-    /**
-     * 执行单行 INSERT，并建立仅属于本次 INSERT 的生成主键上下文。
-     *
-     * 父连接器会在 INSERT 成功后读取生成主键，Model 随后还可能再次调用
-     * getLastInsID()。这里缓存本次真实生成的值，同时在显式普通主键场景返回空值，
-     * 避免 LAST_INSERT_ID()/CURRVAL/@@IDENTITY 的历史会话值被误认为本次主键。
-     *
-     * @param BaseQuery $query        查询对象
-     * @param bool      $getLastInsID 是否返回生成主键
-     *
-     * @return mixed 插入结果或本次生成主键
-     */
-    public function insert(BaseQuery $query, bool $getLastInsID = false)
-    {
-        $this->prepareKingbaseGeneratedKeyContext($query);
-
-        try {
-            $result = parent::insert($query, $getLastInsID);
-        } catch (\Throwable $exception) {
-            $this->resetKingbaseGeneratedKeyContext();
-            throw $exception;
-        }
-
-        if ($getLastInsID) {
-            return $this->kingbaseGeneratedKeyCached ? $this->kingbaseGeneratedKey : '';
-        }
-
-        return $result;
-    }
-
-    /**
-     * 批量插入不会产生可安全归属到单行的生成主键，执行前清理历史上下文。
-     *
-     * @param BaseQuery $query   查询对象
-     * @param array     $dataSet 数据集
-     */
-    public function insertAll(BaseQuery $query, array $dataSet = []): int
-    {
-        $this->resetKingbaseGeneratedKeyContext();
-
-        return parent::insertAll($query, $dataSet);
-    }
-
-    /**
-     * 固定字段批量插入不会返回单行生成主键，执行前清理历史上下文。
-     *
-     * @param BaseQuery $query  查询对象
-     * @param array     $keys   字段集合
-     * @param array     $values 数据集合
-     */
-    public function insertAllByKeys(BaseQuery $query, array $keys, array $values): int
-    {
-        $this->resetKingbaseGeneratedKeyContext();
-
-        return parent::insertAllByKeys($query, $keys, $values);
     }
 
     /**
@@ -180,26 +113,22 @@ trait KingbaseConnection
     }
 
     /**
-     * 获取配置或由当前会话解析得到的 Schema。
+     * 从本次元数据查询实际使用的连接读取当前 Schema。
      *
-     * 尚未建立连接时会主动初始化连接；仍无法确定 Schema 时抛出异常，避免后续
-     * 元数据查询误落入其他模式。
+     * 路由与 getPDOStatement 一致，包含写后读主库和事务固定连接；每次直接
+     * 读取都确认会话状态，不复用另一物理连接留下的 Schema。
      *
-     * @throws \UnexpectedValueException 无法解析当前 Schema
+     * @throws \InvalidArgumentException 当前 Schema 标识符不合法
      *
      * @return string 当前有效的 Schema 名称
      */
     public function getKingbaseSchema(): string
     {
-        if ('' === $this->kingbaseResolvedSchema) {
-            $this->initConnect(true);
-        }
-
-        if ('' === $this->kingbaseResolvedSchema) {
-            throw new \UnexpectedValueException('Unable to resolve the current KES schema');
-        }
-
-        return $this->kingbaseResolvedSchema;
+        $this->initConnect($this->readMaster);
+        return $this->validateKingbaseIdentifier(
+            (string) $this->linkID->query('SELECT current_schema()')->fetchColumn(),
+            'current schema'
+        );
     }
 
     /**
@@ -213,9 +142,9 @@ trait KingbaseConnection
      * 将 KingbaseES 特殊字段映射为正确的 PDO 参数绑定类型。
      *
      * 数组、范围、INTERVAL 和几何类型使用文本形式传输，避免其类型名中的 int
-     * 被通用规则误判为整数；blob、binary、bytea、raw 和 image 类型标记为
-     * kingbase_lob，以便包含 NUL 字节的数据通过 PDO::PARAM_LOB 安全写入。
-     * 其他类型沿用父连接器映射。
+     * 被通用规则误判为整数；仅 MySQL 模式的二进制字段自动使用
+     * PDO::PARAM_LOB。Oracle、SQL Server 模式沿用原连接器的二进制字段
+     * 类型映射；业务显式指定的 PDO 绑定类型不受影响。
      *
      * @param string $type 数据库返回的原始字段类型
      *
@@ -233,9 +162,9 @@ trait KingbaseConnection
             return 'string';
         }
 
-        // KES reports MySQL unsigned integers as uint2/uint4/uint8.  Always
-        // bind them as strings so uint8 values above PHP_INT_MAX are not
-        // truncated before PDO_KDB sends them to the server.
+        // 金仓将 MySQL 无符号整数报告为 uint2/uint4/uint8，统一按字符串绑定，
+        // 避免超出 PHP_INT_MAX 的 uint8 值在 PDO_KDB 发送到服务端之前，
+        // 因 PHP 整数转换而被截断。
         if (1 === preg_match('/^uint\d+$/i', $normalizedType)) {
             return 'bigint';
         }
@@ -245,7 +174,8 @@ trait KingbaseConnection
             return 'kingbase_bit_string';
         }
 
-        if (1 === preg_match('/blob|binary|bytea|\braw\b|\bimage\b/i', $type)) {
+        if ('mysql' === $this->getExpectedKingbaseMode()
+            && 1 === preg_match('/blob|binary|bytea|\braw\b|\bimage\b/i', $type)) {
             return 'kingbase_lob';
         }
 
@@ -269,57 +199,19 @@ trait KingbaseConnection
     }
 
     /**
-     * 只在当前 INSERT 已确认会生成数据库主键时执行回读，并缓存有效结果。
-     *
-     * @param callable $resolver 实际生成主键查询
-     * @param mixed    $empty    不应读取或无法取得时的返回值
-     *
-     * @return mixed 当前 INSERT 的生成主键或空值
-     */
-    protected function resolveKingbaseGeneratedKey(callable $resolver, mixed $empty = ''): mixed
-    {
-        if (!$this->kingbaseGeneratedKeyExpected) {
-            return $empty;
-        }
-
-        if ($this->kingbaseGeneratedKeyCached) {
-            return $this->kingbaseGeneratedKey;
-        }
-
-        $value = $resolver();
-        if (null === $value || false === $value || '' === $value) {
-            return $empty;
-        }
-
-        $this->kingbaseGeneratedKey = $value;
-        $this->kingbaseGeneratedKeyCached = true;
-
-        return $value;
-    }
-
-    /**
-     * 返回当前 Oracle INSERT 经验证实际使用的序列。
-     */
-    protected function getKingbaseInsertSequence(): ?string
-    {
-        return $this->kingbaseInsertSequence;
-    }
-
-    /**
      * 初始化并校验一个物理 PDO_KDB 连接。
      *
-     * 每个 PDO 对象仅初始化一次；依次确认驱动名、服务器兼容模式，设置 search_path，
-     * 并验证同一连接器创建的不同物理连接使用相同 Schema。
+     * 每个 PDO 对象仅检查一次；确认驱动名、服务器兼容模式并读取默认 Schema。
+     * 不主动设置 search_path，不要求不同物理连接的默认 Schema 相同。
      *
-     * @param PDO   $pdo    待初始化的物理连接
-     * @param array $config 合并后的数据库连接配置
+     * @param PDO $pdo 待初始化的物理连接
      *
-     * @throws \UnexpectedValueException 驱动、兼容模式或实际 Schema 不符合预期
+     * @throws \UnexpectedValueException 驱动或兼容模式不符合预期
      * @throws \InvalidArgumentException Schema 标识符不合法
      *
      * @return void
      */
-    protected function initializeKingbaseSession(PDO $pdo, array $config): void
+    protected function initializeKingbaseSession(PDO $pdo): void
     {
         $hash = spl_object_hash($pdo);
         if (isset($this->kingbaseInitializedLinks[$hash])) {
@@ -341,160 +233,20 @@ trait KingbaseConnection
             );
         }
 
-        $configuredSchema = trim((string) ($config['schema'] ?? ''));
-        if ('' !== $configuredSchema) {
-            $configuredSchema = $this->validateKingbaseIdentifier($configuredSchema, 'schema');
-            $quotedSchema = '"' . str_replace('"', '""', $configuredSchema) . '"';
-            $searchPath = 'public' === strtolower($configuredSchema)
-                ? $quotedSchema
-                : $quotedSchema . ', public';
-
-            $pdo->exec('SET search_path TO ' . $searchPath);
-        }
-
-        $currentSchema = $this->validateKingbaseIdentifier(
+        // search_path 由数据库控制，不应用旧版 schema 配置。
+        $this->validateKingbaseIdentifier(
             (string) $pdo->query('SELECT current_schema()')->fetchColumn(),
             'current schema'
         );
 
-        if ('' !== $configuredSchema && 0 !== strcasecmp($configuredSchema, $currentSchema)) {
-            throw new \UnexpectedValueException(
-                'KES schema initialization failed: expected ' . $configuredSchema . ', got ' . $currentSchema
-            );
-        }
-
-        if ('' !== $this->kingbaseResolvedSchema
-            && 0 !== strcasecmp($this->kingbaseResolvedSchema, $currentSchema)) {
-            throw new \UnexpectedValueException(
-                'KES schema mismatch between connections: expected '
-                . $this->kingbaseResolvedSchema . ', got ' . $currentSchema
-            );
-        }
-
-        $this->kingbaseResolvedSchema = $currentSchema;
         $this->kingbaseInitializedLinks[$hash] = true;
-    }
-
-    /**
-     * 为当前 INSERT 解析自增、Identity 或 Oracle Sequence 生成语义。
-     */
-    protected function prepareKingbaseGeneratedKeyContext(BaseQuery $query): void
-    {
-        $this->resetKingbaseGeneratedKeyContext();
-
-        $options = $query->getOptions();
-        $data = is_array($options['data'] ?? null) ? $options['data'] : [];
-        $sequence = trim((string) ($options['sequence'] ?? ''));
-        $mode = $this->getExpectedKingbaseMode();
-
-        if ('oracle' === $mode && '' !== $sequence && $this->dataUsesKingbaseSequence($data, $sequence)) {
-            $this->kingbaseGeneratedKeyExpected = true;
-            $this->kingbaseInsertSequence = $sequence;
-            return;
-        }
-
-        $autoInc = $query->getAutoInc();
-        if (!is_string($autoInc) || '' === $autoInc) {
-            return;
-        }
-
-        [$fieldExists, $fieldValue] = $this->findKingbaseDataField($data, $autoInc);
-        if ($fieldExists && !$this->isKingbaseGeneratedFieldValue($fieldValue)) {
-            return;
-        }
-
-        if ('oracle' !== $mode) {
-            $this->kingbaseGeneratedKeyExpected = true;
-            return;
-        }
-
-        $fields = $this->getFields((string) $query->getTable());
-        $metadataSequence = trim((string) ($fields[$autoInc]['sequence'] ?? ''));
-        if ('' === $metadataSequence) {
-            return;
-        }
-
-        if ('' !== $sequence
-            && $this->normalizeKingbaseSequence($sequence) !== $this->normalizeKingbaseSequence($metadataSequence)) {
-            return;
-        }
-
-        $this->kingbaseGeneratedKeyExpected = true;
-        $this->kingbaseInsertSequence = $metadataSequence;
-    }
-
-    /**
-     * 清除生成主键上下文；任何新 INSERT 都必须重新证明生成语义。
-     */
-    protected function resetKingbaseGeneratedKeyContext(): void
-    {
-        $this->kingbaseGeneratedKeyExpected = false;
-        $this->kingbaseGeneratedKey = null;
-        $this->kingbaseGeneratedKeyCached = false;
-        $this->kingbaseInsertSequence = null;
-    }
-
-    /**
-     * 在大小写不敏感的字段数组中读取指定字段。
-     *
-     * @return array{0:bool,1:mixed}
-     */
-    private function findKingbaseDataField(array $data, string $field): array
-    {
-        foreach ($data as $key => $value) {
-            if (0 === strcasecmp((string) $key, $field)) {
-                return [true, $value];
-            }
-        }
-
-        return [false, null];
-    }
-
-    /**
-     * NULL 或 DEFAULT 表达式仍可触发自增/Identity 默认值。
-     */
-    private function isKingbaseGeneratedFieldValue(mixed $value): bool
-    {
-        if (null === $value) {
-            return true;
-        }
-
-        return $value instanceof Raw && 'DEFAULT' === strtoupper(trim($value->getValue()));
-    }
-
-    /**
-     * 判断 INSERT 数据中是否确实使用指定 Oracle 序列的 NEXTVAL。
-     */
-    private function dataUsesKingbaseSequence(array $data, string $sequence): bool
-    {
-        $expected = $this->normalizeKingbaseSequence($sequence) . '.NEXTVAL';
-
-        foreach ($data as $value) {
-            if (!$value instanceof Raw) {
-                continue;
-            }
-            $expression = strtoupper((string) preg_replace('/[\s`"\[\]]+/', '', $value->getValue()));
-            if (str_contains($expression, $expected)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * 规范化序列限定名，供显式配置与元数据结果比较。
-     */
-    private function normalizeKingbaseSequence(string $sequence): string
-    {
-        return strtoupper((string) preg_replace('/[\s`"\[\]]+/', '', trim($sequence)));
     }
 
     /**
      * 校验不带限定符的 KingbaseES 数据库对象标识符。
      *
      * 只允许字母或下划线开头，后续可包含字母、数字、下划线、美元符号和井号，
-     * 防止配置值直接拼入 SET search_path 等 SQL 时产生歧义或注入风险。
+     * 确保会话返回的名称可供后续元数据读取使用。
      *
      * @param string $value 待校验的标识符
      * @param string $label 错误信息中使用的对象说明

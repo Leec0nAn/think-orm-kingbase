@@ -12,31 +12,64 @@ declare(strict_types=1);
 namespace think\db\connector;
 
 use PDO;
+use think\db\BaseQuery;
 use think\db\concern\KingbaseConnection;
 
 /**
- * KingbaseES MySQL 兼容模式数据库连接器。
+ * KingbaseES MySQL 兼容模式数据库连接器，表名列表继承原 Mysql 查询。
  */
 class KingbaseMysql extends Mysql
 {
     use KingbaseConnection;
 
     /**
-     * 根据 ThinkORM 连接配置生成 PDO_KDB DSN。
+     * 将绑定值渲染为 KingbaseES MySQL 模式可执行的 SQL 字面量。
      *
-     * @param array $config 数据库连接配置
+     * withCount 等流程会把 fetchSql 生成的子查询嵌入实际 SQL。原 Mysql 的
+     * addslashes 转义依赖普通字符串的反斜杠规则，此处显式使用 E 字符串，
+     * 使转义不受 standard_conforming_strings 开关影响。保留原框架的类型
+     * 处理及占位符替换规则，不建立连接，避免改变离线生成和 SQL 日志流程。
      *
-     * @return string kdb: 协议 DSN
+     * @param string $sql  带参数绑定的 SQL 语句
+     * @param array  $bind 参数绑定列表
+     *
+     * @return string 渲染后的 SQL
      */
-    protected function parseDsn(array $config): string
+    public function getRealSql(string $sql, array $bind = []): string
     {
-        $dsn = 'kdb:host=' . $config['hostname'] . ';dbname=' . $config['database'];
+        foreach ($bind as $key => $val) {
+            $value = strval(is_array($val) ? $val[0] : $val);
+            $type = is_array($val) ? $val[1] : self::PARAM_STR;
 
-        if (!empty($config['hostport'])) {
-            $dsn .= ';port=' . $config['hostport'];
+            if (self::PARAM_FLOAT == $type || self::PARAM_STR == $type) {
+                $value = "E'" . addslashes($value) . "'";
+            } elseif (self::PARAM_INT == $type && '' === $value) {
+                $value = '0';
+            }
+
+            $sql = is_numeric($key) ?
+                substr_replace($sql, $value, strpos($sql, '?'), 1) :
+                str_replace(
+                    [':' . $key . ' ', ':' . $key . ',', ':' . $key . ')'],
+                    [$value . ' ', $value . ',', $value . ')'],
+                    $sql . ' '
+                );
         }
 
-        return $dsn;
+        return rtrim($sql);
+    }
+
+    /**
+     * 保留 cursor(true) 的逐行读取调用，不设置 PDO_MYSQL 专属缓冲属性。
+     *
+     * PDO_KDB 没有经验证的 MYSQL_ATTR_USE_BUFFERED_QUERY 对应能力；此处沿用
+     * 现有 getCursor() 及结果转换流程，不依赖 PDO_MYSQL，也不承诺驱动级无缓冲。
+     *
+     * @return \Generator
+     */
+    protected function cursorUnbuffered(BaseQuery $query, string $sql)
+    {
+        yield from $this->getCursor($query, $sql, $query->getModel());
     }
 
     /**
@@ -59,7 +92,7 @@ class KingbaseMysql extends Mysql
             $schema = trim($schema, '`"');
             $tableName = trim($tableName, '`"');
         } else {
-            $schema = $this->getSchemaName();
+            $schema = $this->getKingbaseSchema();
         }
 
         $schemaValue = $this->quoteString($schema);
@@ -125,10 +158,9 @@ SQL;
                 'name' => $field,
                 'type' => $val['full_type'] ?: $val['type'],
                 'notnull' => 'NO' === strtoupper((string) $val['is_nullable']),
-                'default' => $val['default'],
+                'default' => $this->normalizeDefaultValue($val['default']),
                 'primary' => (bool) $val['primary'],
                 'autoinc' => '' !== (string) $val['attidentity'] || !empty($val['serial_sequence']),
-                'sequence' => $val['serial_sequence'] ?: null,
                 'comment' => $val['comment'],
             ];
         }
@@ -137,58 +169,89 @@ SQL;
     }
 
     /**
-     * 获取指定 Schema 下的基础表列表。
+     * 将目录中的纯常量默认值转换为原 Mysql getFields() 的公开值。
      *
-     * @param string $dbName Schema 名，为空时使用当前连接的 Schema
+     * 只解析完整字符串、数字和 NULL；函数、运算、未知或可能改变值的类型转换
+     * 一律保留表达式原文。此方法不执行默认 SQL，也不经过 PHP int/float，避免
+     * 大整数及小数精度丢失。普通 SQL 字符串保留反斜杠，仅 E 字符串解码转义。
      *
-     * @return array 表名列表
+     * @param mixed $value information_schema.columns.column_default
+     * @return mixed 常量值或未改动的默认表达式
      */
-    public function getTables(string $dbName = ''): array
+    protected function normalizeDefaultValue($value)
     {
-        $schema = $dbName ?: $this->getSchemaName();
-        $schemaValue = $this->quoteString($schema);
-        $sql = <<<SQL
-SELECT table_name
-FROM information_schema.tables
-WHERE table_schema = {$schemaValue}
-  AND table_type = 'BASE TABLE'
-ORDER BY table_name
-SQL;
+        if (null === $value) {
+            return null;
+        }
+        if (is_int($value) || is_float($value) || is_bool($value)) {
+            return is_bool($value) ? ($value ? '1' : '0') : (string) $value;
+        }
+        if (!is_string($value)) {
+            return $value;
+        }
 
-        $pdo = $this->getPDOStatement($sql);
-        $result = $pdo->fetchAll(PDO::FETCH_ASSOC);
+        $sql = trim($value);
+        $typeSchema = '(?:(?:(?i:pg_catalog)|"pg_catalog")\s*\.\s*)?';
+        $textType = $typeSchema . '(?:(?i:text|varchar|character\s+varying)|"text"|"varchar")';
+        $integerType = $typeSchema . '(?i:int2|int4|int8|smallint|integer|bigint|uint2|uint4|uint8)';
+        $textCast = '(?:\s*::\s*' . $textType . ')?';
 
-        return array_column($result, 'table_name');
+        if (preg_match("~\\A'((?:''|[^'])*)'" . $textCast . '\\z~s', $sql, $match)) {
+            return str_replace("''", "'", $match[1]);
+        }
+        $escapePattern = <<<'REGEX'
+~\A[Ee]'((?:''|\\.|[^'\\])*)'
+REGEX;
+        if (preg_match($escapePattern . $textCast . '\z~s', $sql, $match)) {
+            $decoded = $this->decodeEscapeDefault(str_replace("''", "'", $match[1]));
+            return null === $decoded ? $value : $decoded;
+        }
+        if (preg_match('~\A(?i:NULL)(?:\s*::\s*(?:' . $textType . '|' . $integerType . '))?\z~', $sql)) {
+            return null;
+        }
+        if (preg_match('~\A([+-]?\d+)(?:\s*::\s*' . $integerType . ')?\z~', $sql, $match)
+            || preg_match("~\\A'([+-]?\\d+)'\\s*::\\s*" . $integerType . '\z~', $sql, $match)) {
+            $digits = ltrim($match[1], '+-0');
+            return '' === $digits ? '0' : (str_starts_with($match[1], '-') ? '-' : '') . $digits;
+        }
+        if (preg_match('~\A[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?\z~', $sql)) {
+            return $sql;
+        }
+
+        return $value;
     }
 
-    /**
-     * 获取最近一次插入产生的自增主键。
-     *
-     * PDO_KDB 当前未实现可靠的 lastInsertId()，因此在同一物理连接上直接
-     * 调用 LAST_INSERT_ID() 取得 MySQL 兼容模式生成值。
-     *
-     * @param string|null $sequence 可选序列名，保留父连接器接口兼容性
-     *
-     * @return mixed 自增主键值，无法取得时返回空字符串
-     */
-    public function getAutoID(?string $sequence = null)
+    /** 解码目录明确标为 E 字符串的转义；不认识的形式保留原表达式。 */
+    private function decodeEscapeDefault(string $body): ?string
     {
-        return $this->resolveKingbaseGeneratedKey(function () {
-            $pdo = $this->linkID->query('SELECT LAST_INSERT_ID() AS id');
-            $result = $pdo->fetch(PDO::FETCH_ASSOC);
-
-            return isset($result['id']) ? (string) $result['id'] : '';
-        });
-    }
-
-    /**
-     * 获取已配置并经服务器确认的 Schema 名称。
-     *
-     * @return string 当前 Schema 名称
-     */
-    protected function getSchemaName(): string
-    {
-        return $this->getKingbaseSchema();
+        $value = '';
+        $simple = ['b' => "\x08", 'f' => "\x0c", 'n' => "\n", 'r' => "\r", 't' => "\t", "'" => "'", '"' => '"', '\\' => '\\'];
+        for ($i = 0, $length = strlen($body); $i < $length; ++$i) {
+            if ('\\' !== $body[$i]) {
+                $value .= $body[$i];
+                continue;
+            }
+            if (++$i >= $length) {
+                return null;
+            }
+            $escape = $body[$i];
+            if (isset($simple[$escape])) {
+                $value .= $simple[$escape];
+            } elseif (preg_match('/\A[0-7]{1,3}/', substr($body, $i), $match)) {
+                $byte = octdec($match[0]);
+                if ($byte > 255) {
+                    return null;
+                }
+                $value .= chr($byte);
+                $i += strlen($match[0]) - 1;
+            } elseif ('x' === $escape && preg_match('/\A[0-9a-fA-F]{1,2}/', substr($body, $i + 1), $match)) {
+                $value .= chr(hexdec($match[0]));
+                $i += strlen($match[0]);
+            } else {
+                return null;
+            }
+        }
+        return $value;
     }
 
     /**
@@ -210,7 +273,7 @@ SQL;
      */
     protected function quoteString(string $value): string
     {
-        $this->initConnect(true);
+        $this->initConnect($this->readMaster);
 
         return $this->linkID->quote($value);
     }
