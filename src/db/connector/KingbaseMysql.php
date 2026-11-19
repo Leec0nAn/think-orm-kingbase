@@ -23,6 +23,50 @@ class KingbaseMysql extends Mysql
     use KingbaseConnection;
 
     /**
+     * 证明等值内连接可以在原分组外键后补充主表主键。
+     *
+     * 仅接受无继承、无分区的普通表，以及真实有效、不可延迟的单列整数主键；
+     * 关联列必须为相同物理整数类型且非空。表名按实际查询连接的搜索路径解析。
+     * 不扩充公开字段结构，也不缓存证明结果，以免同名表重建后沿用旧属性。
+     *
+     * @internal 由金仓MySQL构造器在结构检查通过后调用
+     */
+    public function canSupplementGroupByPrimaryKey(string $table, string $primaryKey, string $joinedTable, string $foreignKey): bool
+    {
+        $sql = <<<'SQL'
+SELECT 1
+FROM pg_catalog.pg_class p
+JOIN pg_catalog.pg_attribute a ON a.attrelid = p.oid AND a.attname = :pk
+JOIN pg_catalog.pg_constraint c ON c.conrelid = p.oid AND c.contype = 'p'
+JOIN pg_catalog.pg_index i ON i.indexrelid = c.conindid
+JOIN pg_catalog.pg_class f ON f.oid = pg_catalog.to_regclass(:joined_table)
+JOIN pg_catalog.pg_attribute b ON b.attrelid = f.oid AND b.attname = :fk
+WHERE p.oid = pg_catalog.to_regclass(:main_table)
+  AND p.relkind = 'r' AND f.relkind = 'r'
+  AND NOT c.condeferrable AND c.convalidated
+  AND pg_catalog.array_length(c.conkey, 1) = 1 AND c.conkey[1] = a.attnum
+  AND i.indisvalid AND i.indisready AND i.indimmediate
+  AND a.attnum > 0 AND b.attnum > 0 AND NOT a.attisdropped AND NOT b.attisdropped
+  AND a.attnotnull AND b.attnotnull AND a.atttypid = b.atttypid
+  AND a.atttypid IN ('pg_catalog.int2'::pg_catalog.regtype,
+                    'pg_catalog.int4'::pg_catalog.regtype,
+                    'pg_catalog.int8'::pg_catalog.regtype)
+  AND NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_inherits h
+      WHERE h.inhparent IN (p.oid, f.oid) OR h.inhrelid IN (p.oid, f.oid)
+  )
+SQL;
+        $statement = $this->getPDOStatement($sql, [
+            'main_table' => [$table, PDO::PARAM_STR], 'pk' => [$primaryKey, PDO::PARAM_STR],
+            'joined_table' => [$joinedTable, PDO::PARAM_STR], 'fk' => [$foreignKey, PDO::PARAM_STR],
+        ]);
+        $result = false !== $statement->fetchColumn();
+        $statement->closeCursor();
+
+        return $result;
+    }
+
+    /**
      * 将绑定值渲染为 KingbaseES MySQL 模式可执行的 SQL 字面量。
      *
      * withCount 等流程会把 fetchSql 生成的子查询嵌入实际 SQL。原 Mysql 的

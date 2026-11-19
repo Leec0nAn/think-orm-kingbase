@@ -30,13 +30,12 @@ class KingbaseOracle extends Oracle
      * 字段和主键使用同一物理 Schema/表范围。公开 autoinc 沿用原 Oracle
      * 组件的主键标记。
      *
-     * 字段名保留目录中的原始大小写。目录值与查询结果列名不是同一层面的信息；
-     * 单表 Model SELECT 由模式 Builder 使用显式同名别名保持两侧一致，避免
-     * enable_upper_colname 改变返回键后丢失模型主键。普通 Query 保留服务端行为。
+     * 字段的 name 值保留目录中的原始名称；元数据数组的外层字段键沿用原
+     * fieldCase()，按 PDO::ATTR_CASE 配置处理。连接配置要求见 README 使用注意事项。
      *
      * @param string $tableName 表名，可包含 Schema 和别名
      *
-     * @return array 以实际大小写字段名为键的 ThinkORM 字段元数据
+     * @return array 外层字段键遵循 PDO::ATTR_CASE 的 ThinkORM 字段元数据
      */
     public function getFields(string $tableName): array
     {

@@ -20,41 +20,6 @@ use think\db\Connection;
 class KingbaseOracle extends Oracle
 {
     /**
-     * 单表 Model 查询显式保留字段名，避免 enable_upper_colname 改变模型主键。
-     *
-     * 元数据中的字段名是目录值，不受 PDO 的列名大小写策略控制。为模型字段增加
-     * 同名双引号别名，使返回数据仍使用元数据名称；普通 Query、关联查询、表达式
-     * 和用户显式设置的别名继续使用原 Builder 行为，不统一转换结果键。
-     */
-    protected function parseField(Query $query, array $fields): string
-    {
-        $table = $query->getTable();
-        if (!$query->getModel() || $query->getOption('join') || !is_string($table)
-            || false !== strpbrk($table, ',()')) {
-            return parent::parseField($query, $fields);
-        }
-
-        $names = $query->getTableFields();
-        if (!$names) {
-            return parent::parseField($query, $fields);
-        }
-        if (!$fields || ['*'] === $fields) {
-            $fields = $names;
-        }
-
-        $parts = [];
-        foreach ($fields as $key => $field) {
-            if (is_int($key) && is_string($field) && in_array($field, $names, true)) {
-                $parts[] = $this->parseKey($query, $field) . ' AS "' . str_replace('"', '""', $field) . '"';
-            } else {
-                $parts[] = parent::parseField($query, [$key => $field]);
-            }
-        }
-
-        return implode(',', $parts);
-    }
-
-    /**
      * 使用 VALUES 语法构造多行 INSERT。
      *
      * PDO_KDB 无法在父 Oracle Builder 的 UNION ALL SELECT 批量写法中稳定推断
